@@ -1,7 +1,10 @@
-/* ─── EverIA Agent Dashboard ──────────────────────────────── */
+/* ─── EverIA Agent Dashboard ─────────────────────────────── */
 
 let config = {};
 let currentAgent = null;
+let qrPollTimer = null;
+let countdownInterval = null;
+const QR_TTL_MS = 60000; // WhatsApp QR codes expire in ~60s
 
 async function loadAgents() {
   try {
@@ -16,34 +19,27 @@ async function loadAgents() {
 
 function render() {
   const agents = config.agents || [];
-  const grid = document.getElementById('agentsGrid');
-  const empty = document.getElementById('emptyState');
+  const grid   = document.getElementById('agentsGrid');
+  const empty  = document.getElementById('emptyState');
 
-  if (!agents.length) {
-    empty.classList.remove('hidden');
-    return;
-  }
-
+  if (!agents.length) { empty.classList.remove('hidden'); return; }
   empty.classList.add('hidden');
 
-  // Stats
-  const active = agents.filter(a => a.status === 'active').length;
-  const waDisconnected = agents.filter(a => !a.connections?.whatsapp?.connected).length;
-  document.getElementById('statActive').textContent = active;
-  document.getElementById('statTotal').textContent = agents.length;
-  document.getElementById('statWhatsapp').textContent = waDisconnected;
+  document.getElementById('statActive').textContent   = agents.filter(a => a.status === 'active').length;
+  document.getElementById('statTotal').textContent    = agents.length;
+  document.getElementById('statWhatsapp').textContent = agents.filter(a => !a.connections?.whatsapp?.connected).length;
 
-  grid.innerHTML = agents.map(agent => buildCard(agent)).join('');
+  grid.innerHTML = agents.map(buildCard).join('');
 
-  // Attach connect handlers
   grid.querySelectorAll('[data-connect]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const agentId = btn.getAttribute('data-connect');
-      const agent = agents.find(a => a.id === agentId);
+      const agent = agents.find(a => a.id === btn.getAttribute('data-connect'));
       if (agent) openModal(agent);
     });
   });
 }
+
+/* ─── Card Builder ──────────────────────────────────────── */
 
 function buildCard(agent) {
   const tg = agent.connections?.telegram;
@@ -67,8 +63,7 @@ function buildCard(agent) {
           ${tg.connected ? '● Conectado' : '○ Desconectado'}
         </span>
       </div>
-    </div>
-  ` : '';
+    </div>` : '';
 
   const waRow = wa ? `
     <div class="connection-row">
@@ -86,8 +81,7 @@ function buildCard(agent) {
              <button class="btn-connect" data-connect="${agent.id}">Conectar</button>`
         }
       </div>
-    </div>
-  ` : '';
+    </div>` : '';
 
   return `
     <div class="agent-card ${isActive ? '' : 'inactive'}">
@@ -101,8 +95,7 @@ function buildCard(agent) {
           <div class="agent-client">
             ${agent.client_url
               ? `<a href="${escHtml(agent.client_url)}" target="_blank" rel="noopener">${escHtml(agent.client)}</a>`
-              : escHtml(agent.client || '')
-            }
+              : escHtml(agent.client || '')}
           </div>
           <span class="status-badge ${isActive ? 'active' : 'inactive'}">
             <span class="status-dot"></span>
@@ -110,99 +103,215 @@ function buildCard(agent) {
           </span>
         </div>
       </div>
-
       ${agent.description ? `<p class="agent-desc">${escHtml(agent.description)}</p>` : ''}
-
       <div>
         <div class="connections-label">Canais</div>
-        <div class="connections">
-          ${tgRow}
-          ${waRow}
-        </div>
+        <div class="connections">${tgRow}${waRow}</div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-/* ─── Modal ───────────────────────────────────────────────── */
+/* ─── Modal ─────────────────────────────────────────────── */
 
 function openModal(agent) {
   currentAgent = agent;
-  const modal = document.getElementById('waModal');
   document.getElementById('modalAgentName').textContent = `Conectar WhatsApp — ${agent.name}`;
-  document.getElementById('modalAccountId').textContent = `account_id: ${agent.connections?.whatsapp?.account_id || '—'}`;
-
-  // Control UI link
-  const cuiUrl = (config.openclaw_url || '') + '/channels/whatsapp';
-  document.getElementById('openControlUI').href = cuiUrl;
-
-  // Reset pairing
-  document.getElementById('pairingInput').value = '';
-  document.getElementById('pairingDisplay').classList.add('hidden');
-
-  // Reset tabs
-  switchTab('qr');
-
-  modal.classList.remove('hidden');
+  document.getElementById('modalAccountId').textContent = `account: ${agent.connections?.whatsapp?.account_id || '—'}`;
+  resetQrState();
+  document.getElementById('waModal').classList.remove('hidden');
 }
 
 function closeModal() {
+  stopQrFlow();
   document.getElementById('waModal').classList.add('hidden');
   currentAgent = null;
 }
 
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === tab));
-  document.getElementById('tabQr').classList.toggle('hidden', tab !== 'qr');
-  document.getElementById('tabPairing').classList.toggle('hidden', tab !== 'pairing');
+/* ─── QR State Machine ──────────────────────────────────── */
+
+function resetQrState() {
+  stopQrFlow();
+  show('qrPlaceholder'); hide('qrCanvas'); hide('qrSpinner'); hide('qrSuccess'); hide('qrError'); hide('qrTimer');
+  document.getElementById('btnGenerateQrLabel').textContent = 'Gerar QR Code';
+  document.getElementById('btnGenerateQr').disabled = false;
 }
 
-/* ─── Pairing Code ────────────────────────────────────────── */
+function showSpinner() {
+  hide('qrPlaceholder'); hide('qrCanvas'); show('qrSpinner'); hide('qrSuccess'); hide('qrError');
+}
 
-function showPairing() {
-  const raw = document.getElementById('pairingInput').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (raw.length < 4) {
-    alert('Digite pelo menos 4 caracteres do código de pareamento.');
-    return;
+function showQr(dataUrl) {
+  hide('qrPlaceholder'); hide('qrSpinner'); hide('qrSuccess'); hide('qrError');
+  const canvas = document.getElementById('qrCanvas');
+  // Draw the QR onto our canvas
+  QRCode.toCanvas(canvas, dataUrl, {
+    width: 200,
+    margin: 2,
+    color: { dark: '#000000', light: '#ffffff' },
+  }, (err) => {
+    if (err) { showError('Erro ao renderizar QR'); return; }
+    show('qrCanvas');
+    startCountdown();
+  });
+}
+
+function showSuccess() {
+  stopQrFlow();
+  hide('qrPlaceholder'); hide('qrCanvas'); hide('qrSpinner'); hide('qrError'); hide('qrTimer');
+  show('qrSuccess');
+  document.getElementById('btnGenerateQrLabel').textContent = 'Gerar Novo QR';
+  document.getElementById('btnGenerateQr').disabled = false;
+  // Reload agents to update status
+  setTimeout(loadAgents, 1500);
+}
+
+function showError(msg) {
+  stopQrFlow();
+  hide('qrPlaceholder'); hide('qrCanvas'); hide('qrSpinner'); hide('qrSuccess'); hide('qrTimer');
+  document.getElementById('qrErrorMsg').textContent = msg;
+  show('qrError');
+  document.getElementById('btnGenerateQrLabel').textContent = 'Tentar Novamente';
+  document.getElementById('btnGenerateQr').disabled = false;
+}
+
+/* ─── Countdown Timer ───────────────────────────────────── */
+
+function startCountdown() {
+  show('qrTimer');
+  const bar = document.getElementById('timerBar');
+  const secs = document.getElementById('timerSecs');
+  const total = QR_TTL_MS / 1000;
+  let remaining = total;
+
+  bar.style.width = '100%';
+  bar.className = 'timer-bar';
+  secs.textContent = total;
+
+  countdownInterval = setInterval(() => {
+    remaining--;
+    const pct = (remaining / total) * 100;
+    bar.style.width = pct + '%';
+    secs.textContent = remaining;
+    if (remaining <= 10) bar.className = 'timer-bar critical';
+    else if (remaining <= 20) bar.className = 'timer-bar urgent';
+
+    if (remaining <= 0) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+      // QR expired — auto regenerate
+      generateQr();
+    }
+  }, 1000);
+}
+
+function stopQrFlow() {
+  if (qrPollTimer)      { clearTimeout(qrPollTimer);   qrPollTimer = null; }
+  if (countdownInterval){ clearInterval(countdownInterval); countdownInterval = null; }
+}
+
+/* ─── QR Generation Flow ────────────────────────────────── */
+
+async function generateQr() {
+  if (!currentAgent) return;
+
+  stopQrFlow();
+  showSpinner();
+  document.getElementById('btnGenerateQr').disabled = true;
+  document.getElementById('btnGenerateQrLabel').textContent = 'Aguardando…';
+
+  const accountId = currentAgent.connections?.whatsapp?.account_id || '';
+
+  try {
+    const url = `/api/whatsapp-qr?action=start&account=${encodeURIComponent(accountId)}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      showError(data.error || 'Falha ao conectar ao servidor');
+      return;
+    }
+
+    const result = data.result;
+
+    // whatsapp_login with action=start returns:
+    // { status: 'qr', qr: '<qr-string>' }  → show QR
+    // { status: 'open' }                    → already connected
+    // { status: 'connecting' }              → still connecting
+
+    if (result?.status === 'open' || result?.connected) {
+      showSuccess();
+      return;
+    }
+
+    if (result?.qr) {
+      showQr(result.qr);
+      pollForConnection(accountId);
+      return;
+    }
+
+    // Unexpected response — show error
+    showError('Resposta inesperada do servidor: ' + JSON.stringify(result).slice(0, 80));
+
+  } catch (err) {
+    showError('Erro de rede: ' + err.message);
   }
-  // Format: XXXX-XXXX
-  const formatted = raw.length >= 8 ? raw.slice(0, 4) + '-' + raw.slice(4, 8) : raw;
-  document.getElementById('pairingCode').textContent = formatted;
-  document.getElementById('pairingDisplay').classList.remove('hidden');
 }
 
-/* ─── Events ──────────────────────────────────────────────── */
+async function pollForConnection(accountId) {
+  // Poll every 3 seconds to check if the QR was scanned
+  qrPollTimer = setTimeout(async () => {
+    if (!currentAgent) return;
+
+    try {
+      const url = `/api/whatsapp-qr?action=wait&account=${encodeURIComponent(accountId)}&timeout=5000`;
+      const res  = await fetch(url);
+      const data = await res.json();
+
+      if (!res.ok) { pollForConnection(accountId); return; }
+
+      const result = data.result;
+
+      if (result?.status === 'open' || result?.connected) {
+        showSuccess();
+        return;
+      }
+
+      if (result?.status === 'qr' && result?.qr) {
+        // New QR received (rotated) — update display
+        stopQrFlow();
+        showQr(result.qr);
+        pollForConnection(accountId);
+        return;
+      }
+
+      // Still waiting — poll again
+      pollForConnection(accountId);
+
+    } catch {
+      // Network error — retry
+      pollForConnection(accountId);
+    }
+  }, 3000);
+}
+
+/* ─── Events ─────────────────────────────────────────────── */
 
 document.getElementById('modalClose').addEventListener('click', closeModal);
-
 document.getElementById('waModal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
+document.getElementById('btnGenerateQr').addEventListener('click', generateQr);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => switchTab(tab.getAttribute('data-tab')));
-});
+/* ─── Helpers ─────────────────────────────────────────────── */
 
-document.getElementById('showPairingCode').addEventListener('click', showPairing);
-
-document.getElementById('pairingInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') showPairing();
-});
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeModal();
-});
-
-/* ─── Utils ───────────────────────────────────────────────── */
+function show(id) { document.getElementById(id)?.classList.remove('hidden'); }
+function hide(id) { document.getElementById(id)?.classList.add('hidden'); }
 
 function escHtml(str) {
   if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-/* ─── Init ────────────────────────────────────────────────── */
+/* ─── Init ───────────────────────────────────────────────── */
 loadAgents();
