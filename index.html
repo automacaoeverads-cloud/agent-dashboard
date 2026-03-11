@@ -7,6 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- QR Code library -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -21,7 +23,7 @@
           <span class="logo-sub">Agent Dashboard</span>
         </div>
       </div>
-      <div class="header-stats" id="headerStats">
+      <div class="header-stats">
         <div class="stat-chip">
           <span class="stat-dot green"></span>
           <span id="statActive">0</span> ativos
@@ -40,22 +42,16 @@
 
   <!-- Main -->
   <main class="main">
-
     <div class="section-header">
       <h1 class="section-title">Agentes</h1>
       <p class="section-sub">Gerencie seus agentes de SDR e suas conexões de canal</p>
     </div>
-
-    <div class="agents-grid" id="agentsGrid">
-      <!-- Cards rendered by JS -->
-    </div>
-
+    <div class="agents-grid" id="agentsGrid"></div>
     <div class="empty-state hidden" id="emptyState">
       <div class="empty-icon">🤖</div>
       <p>Nenhum agente configurado.</p>
       <span>Edite o arquivo <code>agents.json</code> para adicionar agentes.</span>
     </div>
-
   </main>
 
   <!-- WhatsApp Modal -->
@@ -75,57 +71,39 @@
         </div>
       </div>
 
-      <div class="modal-tabs">
-        <button class="tab active" data-tab="qr">QR Code</button>
-        <button class="tab" data-tab="pairing">Código de Pareamento</button>
+      <!-- QR Area -->
+      <div class="qr-area" id="qrArea">
+        <div class="qr-placeholder" id="qrPlaceholder">
+          <div class="qr-placeholder-icon">📱</div>
+          <p>Clique em "Gerar QR Code" para iniciar</p>
+        </div>
+        <canvas id="qrCanvas" class="hidden"></canvas>
+        <div class="qr-spinner hidden" id="qrSpinner">
+          <div class="spinner"></div>
+          <p>Gerando QR Code…</p>
+        </div>
+        <div class="qr-success hidden" id="qrSuccess">
+          <div class="qr-success-icon">✅</div>
+          <p>WhatsApp conectado com sucesso!</p>
+        </div>
+        <div class="qr-error hidden" id="qrError">
+          <div class="qr-error-icon">⚠️</div>
+          <p id="qrErrorMsg">Erro ao gerar QR Code</p>
+        </div>
       </div>
 
-      <!-- QR Tab -->
-      <div class="tab-content" id="tabQr">
-        <div class="info-box">
-          <p>Para conectar via QR Code, acesse o <strong>Control UI</strong> do OpenClaw e escaneie o código com o WhatsApp do número dedicado.</p>
-        </div>
-        <div class="steps">
-          <div class="step">
-            <div class="step-num">1</div>
-            <div class="step-text">Abra o Control UI do OpenClaw</div>
-          </div>
-          <div class="step">
-            <div class="step-num">2</div>
-            <div class="step-text">Vá em <strong>Canais → WhatsApp</strong></div>
-          </div>
-          <div class="step">
-            <div class="step-num">3</div>
-            <div class="step-text">Escaneie o QR Code com o celular do número da academia</div>
-          </div>
-        </div>
-        <a class="btn-primary" id="openControlUI" href="#" target="_blank">
-          Abrir Control UI →
-        </a>
+      <div class="qr-timer hidden" id="qrTimer">
+        <div class="timer-bar-track"><div class="timer-bar" id="timerBar"></div></div>
+        <span id="timerLabel">Escaneie em <strong id="timerSecs">60</strong>s</span>
       </div>
 
-      <!-- Pairing Tab -->
-      <div class="tab-content hidden" id="tabPairing">
-        <div class="info-box">
-          <p>Execute o script de pareamento no servidor e cole o código de 8 dígitos abaixo:</p>
-          <code class="code-block">node scripts/whatsapp-pairing-code.mjs &lt;phone&gt; &lt;account_id&gt;</code>
-        </div>
-        <div class="pairing-input-group">
-          <label>Código de Pareamento (8 caracteres)</label>
-          <input
-            type="text"
-            id="pairingInput"
-            class="pairing-input"
-            placeholder="Ex: ABC1-DEF2"
-            maxlength="9"
-          />
-        </div>
-        <div class="pairing-display hidden" id="pairingDisplay">
-          <p class="pairing-label">Digite este código no WhatsApp:</p>
-          <div class="pairing-code" id="pairingCode"></div>
-          <p class="pairing-hint">WhatsApp → Configurações → Aparelhos Conectados → Conectar com número de telefone</p>
-        </div>
-        <button class="btn-primary" id="showPairingCode">Exibir Código</button>
+      <div class="qr-actions">
+        <button class="btn-primary" id="btnGenerateQr">
+          <span id="btnGenerateQrLabel">Gerar QR Code</span>
+        </button>
+        <p class="qr-hint">
+          Abra o WhatsApp do número dedicado → <strong>Configurações → Aparelhos Conectados → Conectar aparelho</strong>
+        </p>
       </div>
     </div>
   </div>
