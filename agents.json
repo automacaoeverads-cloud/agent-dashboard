@@ -1,0 +1,29 @@
+{
+  "openclaw_url": "https://srv1451643.hstgr.cloud",
+  "agents": [
+    {
+      "id": "ga-academia",
+      "name": "Amanda",
+      "role": "SDR",
+      "client": "G.A Academia",
+      "client_url": "https://gaacademia.com.br",
+      "description": "Qualifica leads e agenda aulas experimentais gratuitas para a G.A Academia.",
+      "avatar": "💪",
+      "status": "active",
+      "connections": {
+        "telegram": {
+          "connected": true,
+          "bot_username": "everADS_claw_bot",
+          "account_id": "ever-ads",
+          "note": "Bot principal da Amanda"
+        },
+        "whatsapp": {
+          "connected": false,
+          "phone": null,
+          "account_id": "amanda-ga",
+          "note": "Número dedicado G.A Academia (produção)"
+        }
+      }
+    }
+  ]
+}
